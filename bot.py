@@ -1,14 +1,17 @@
 import asyncio
 import feedparser
+import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
+from aiohttp import web
 
 # --- НАСТРОЙКИ ---
+# ВАШ ТОКЕН
 BOT_TOKEN = '8667142122:AAFYJe4FP0W7NIXXTOQXDFWxkYkSCvRR8WY' 
 
-# ВАШ CHAT ID (замените на ваш реальный ID, который бот выдал при команде /start)
+# ВАШ CHAT ID (замените на ваш реальный ID)
 MY_CHAT_ID = 123456789  
 
 KEYWORDS = ['gta 6', 'gta vi', 'grand theft auto', 'rockstar', 'gta']
@@ -38,6 +41,22 @@ seen_links = set()
 # Настройки часового пояса
 MOSCOW_TZ = ZoneInfo('Europe/Moscow')
 
+# --- ВЕБ-СЕРВЕР ДЛЯ RENDER (на aiohttp) ---
+async def health_check(request):
+    return web.Response(text="Bot is running!")
+
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    # Render передает порт в переменной окружения PORT
+    port = int(os.environ.get('PORT', 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Веб-сервер запущен на порту {port}")
+
+# --- ЛОГИКА БОТА ---
 def get_all_news():
     """Собирает новости и возвращает список"""
     all_found = []
@@ -70,7 +89,7 @@ def get_all_news():
 async def send_daily_digest(target_chat_id):
     """Отправляет дайджест"""
     if not target_chat_id or target_chat_id == 123456789:
-        print("ВНИМАНИЕ: Укажите ваш реальный Chat ID в переменной MY_CHAT_ID, иначе бот не знает, куда слать новости.")
+        print("ВНИМАНИЕ: Укажите ваш реальный Chat ID в переменной MY_CHAT_ID.")
         return
 
     print("Собираю новости для дайджеста...")
@@ -107,25 +126,30 @@ async def scheduler():
         print(f"Следующая проверка новостей: {next_run.strftime('%d.%m.%Y %H:%M')} (МСК). Жду...")
         
         await asyncio.sleep(wait_seconds)
-        
-        # Планировщик отправляет новости на ваш жестко заданный ID
         await send_daily_digest(MY_CHAT_ID)
 
 # --- ОБРАБОТЧИКИ КОМАНД ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    await message.answer(f"Привет! Я бот для новостей GTA VI.\nЯ буду присылать дайджест **дважды в день (в 7:30 и 21:00 по МСК)**.\nА по команде `/news` я могу прислать новости прямо сейчас!")
-    print(f"Кто-то нажал /start. Chat ID: {message.chat.id}. Если это вы и ID отличается от MY_CHAT_ID, обновите его в коде.")
+    await message.answer(f"Привет! Я бот для новостей GTA VI.\nЯ буду присылать дайджест **дважды в день (в 7:30 и 21:00 по МСК)**.\nА по команде `/news` я могу прислать новости прямо сейчас!\nВаш Chat ID: `{message.chat.id}`")
+    print(f"Кто-то нажал /start. Chat ID: {message.chat.id}")
 
 @dp.message(Command("news"))
 async def cmd_news(message: types.Message):
     await message.answer("🔄 Запускаю внеплановый сбор новостей. Это может занять до 15 секунд...")
-    await send_daily_digest(MY_CHAT_ID)
+    await send_daily_digest(message.chat.id)
 
 # -------------------------
 
 async def main():
+    # 1. Сбрасываем старые вебхуки, чтобы избежать конфликта при деплое
+    await bot.delete_webhook(drop_pending_updates=True)
+    
+    # 2. Запускаем асинхронный веб-сервер
+    await start_web_server()
+    
+    # 3. Запускаем планировщик и бота
     asyncio.create_task(scheduler())
     await dp.start_polling(bot)
 
